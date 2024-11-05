@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 from collections import deque
 import random
+import time
 
 class Track:
     def __init__(self, width, height):
@@ -19,11 +20,33 @@ class Track:
         finish_line_x = self.width // 2 - outer_track_width // 2 + 530
         finish_line_y = self.height // 2 + outer_track_height // 2 - 200
         self.finish_line = pygame.Rect(
-            finish_line_x - 530,  # x inicial
-            finish_line_y - 5,    # y inicial (un poco arriba para mejor detección)
-            530,                  # ancho
-            10                    # alto
+            finish_line_x - 10,  # x initial
+            finish_line_y - 5,    # y initial (a bit higher for better detection)
+            20,                  # width
+            10                   # height
         )
+    def check_finish_line(self, vehicle):
+        # Create a rectangle representing the finish line
+        finish_line_rect = pygame.Rect(
+            self.finish_line.x,
+            self.finish_line.y,
+            vehicle.finish_line_width,
+            vehicle.finish_line_height
+        )
+
+        # Check if the vehicle is overlapping the finish line rectangle
+        if finish_line_rect.colliderect(vehicle.position[0] - vehicle.finish_line_width//2,
+                                        vehicle.position[1] - vehicle.finish_line_height//2,
+                                        vehicle.finish_line_width,
+                                        vehicle.finish_line_height):
+            if not vehicle.crossed_finish_line:
+                vehicle.crossed_finish_line = True
+                vehicle.laps_completed += 1
+                return True
+        else:
+            vehicle.crossed_finish_line = False
+
+        return False
         
     def create_checkpoints(self):
         # Crear checkpoints en la pista verde (entre los rectángulos exterior e interior)
@@ -89,11 +112,11 @@ class Track:
                          (self.start_line_x, self.start_line_y), 
                          (self.start_line_x, start_line_y_end + 10), 10)
 
-        finish_line_x = self.width // 2 - outer_track_width // 2 + 530
+        finish_line_x = self.width // 2 - outer_track_width // 2 + 600
         finish_line_y = self.height // 2 + outer_track_height // 2 - 200
         pygame.draw.line(track, (255, 0, 0), 
-                         (finish_line_x, finish_line_y), 
-                         (finish_line_x - 530, finish_line_y), 10)
+                         (finish_line_x , finish_line_y), 
+                         (finish_line_x - 70, finish_line_y), 10)
 
         return track
 
@@ -120,6 +143,8 @@ class Track:
     def draw(self, screen):
         screen.blit(self.track_surface, (0, 0))
         self.draw_boundaries(screen)
+        # Dibujar la línea de meta
+        pygame.draw.rect(screen, (255, 0, 0), self.finish_line, 2)
 
     def draw_boundaries(self, screen):
         pygame.draw.rect(screen, (255, 255, 0), self.outer_track_rect, 2)
@@ -133,10 +158,12 @@ class Vehicle:
         self.laps_completed = 0
         self.crossed_finish_line = False  # Nuevo: para controlar el cruce de la línea de meta
         self.reset()
+        self.finish_line_width = 20  # Width of the finish line rectangle
+        self.finish_line_height = 10 # Height of the finish line rectangle
 
     def reset(self):
         self.position = self.start_pos.copy()
-        self.angle = 0
+        self.angle = 180
         self.speed = 0
         self.max_speed = 5
         self.min_speed = -2
@@ -149,24 +176,30 @@ class Vehicle:
         self.laps_completed = 0
         self.time_alive = 0
         self.crossed_finish_line = False
+        self.last_checkpoint_time = 0
 
     def check_finish_line(self, track):
-        # Crear un pequeño rectángulo alrededor del vehículo
-        vehicle_rect = pygame.Rect(
-            self.position[0] - 5,  # x
-            self.position[1] - 5,  # y
-            10,                    # ancho
-            10                     # alto
+        # Create a rectangle representing the finish line
+        finish_line_rect = pygame.Rect(
+            track.finish_line.x,
+            track.finish_line.y,
+            self.finish_line_width,
+            self.finish_line_height
         )
-        
-        # Verificar si el vehículo está tocando la línea de meta
-        if vehicle_rect.colliderect(track.finish_line):
-            if not self.crossed_finish_line:  # Solo si no había cruzado antes
+
+        # Check if the vehicle is overlapping the finish line rectangle
+        if finish_line_rect.colliderect(self.position[0] - self.finish_line_width//2,
+                                        self.position[1] - self.finish_line_height//2,
+                                        self.finish_line_width,
+                                        self.finish_line_height):
+            if not self.crossed_finish_line and time.time() - self.last_checkpoint_time > 1:
                 self.crossed_finish_line = True
                 self.laps_completed += 1
+                self.last_checkpoint_time = time.time()  # Nuevo: actualizar el tiempo del último checkpoint
                 return True
         else:
-            self.crossed_finish_line = False  # Resetear cuando se aleja de la línea
+            self.crossed_finish_line = False
+
         return False
         
     def accelerate(self):
@@ -227,13 +260,13 @@ class Vehicle:
 
         # Si detecta un borde a la izquierda o frente izquierdo, gira a la derecha
         if left_radar < 0.3 or front_left_radar < 0.3:
-            self.angle -= 5
+            self.angle += 5
         # Si detecta un borde a la derecha o frente derecho, gira a la izquierda
         elif right_radar < 0.3 or front_right_radar < 0.3:
-            self.angle += 5
-        # Si detecta un borde enfrente, gira a una dirección aleatoria
+            self.angle -= 5
+        # Si detecta un borde enfrente, gira a la izquierda (sentido antihorario)
         elif front_radar < 0.3:
-            self.angle += np.random.choice([-5, 5])
+            self.angle -= 5
 
     def check_collision(self, track):
         if not track.outer_track_rect.collidepoint(self.position) or track.inner_track_rect.collidepoint(self.position):
@@ -444,8 +477,8 @@ def main():
                 pygame.draw.circle(screen, (0, 255, 0), (int(checkpoint[0]), int(checkpoint[1])), 5)
             
             # Mostrar contador de vueltas
-            laps_text = font.render(f"Vueltas: {vehicle.laps_completed}", True, (0, 0, 0))
-            screen.blit(laps_text, (10, 10))
+            #laps_text = font.render(f"Vueltas: {vehicle.laps_completed}", True, (0, 0, 0))
+            #screen.blit(laps_text, (10, 10))
             
             pygame.display.flip()
             clock.tick(60)
